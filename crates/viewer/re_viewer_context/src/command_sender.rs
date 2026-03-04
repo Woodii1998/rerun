@@ -4,13 +4,22 @@ use re_chunk::EntityPath;
 use re_chunk_store::external::re_chunk::Chunk;
 use re_data_source::LogDataSource;
 use re_log_channel::LogReceiver;
-use re_log_types::StoreId;
+use re_log_types::{AbsoluteTimeRange, StoreId, TimelineName};
 use re_ui::{UICommand, UICommandSender};
 
 use crate::time_control::TimeControlCommand;
 use crate::{AuthContext, RecordingOrTable, Route, ScreenshotTarget, ViewId};
 
 // ----------------------------------------------------------------------------
+
+#[derive(Clone, Debug)]
+pub struct TimeRangeAnnotation {
+    pub timeline: TimelineName,
+    pub time_range: AbsoluteTimeRange,
+    pub title: String,
+    pub note: String,
+    pub tags: Vec<String>,
+}
 
 /// Commands used by internal system components
 // TODO(jleibs): Is there a better crate for this?
@@ -120,6 +129,14 @@ pub enum SystemCommand {
     TimeControlCommands {
         store_id: StoreId,
         time_commands: Vec<TimeControlCommand>,
+    },
+
+    /// Submit user-authored annotation metadata for a selected timeline range.
+    ///
+    /// NOTE: The backend integration is handled in `re_viewer` and may be a no-op in some builds.
+    SubmitTimeRangeAnnotation {
+        store_id: StoreId,
+        annotation: TimeRangeAnnotation,
     },
 
     /// Sets the focus to the given item.

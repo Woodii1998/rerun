@@ -1240,6 +1240,24 @@ impl App {
                 self.notifications.add(notification);
             }
 
+            SystemCommand::SubmitTimeRangeAnnotation {
+                store_id,
+                annotation,
+            } => {
+                re_log::info!(
+                    "TODO: submit time range annotation to backend. store_id={store_id:?}, timeline={}, range=[{}, {}], title={:?}, note_len={}, tags={:?}",
+                    annotation.timeline,
+                    annotation.time_range.min().as_i64(),
+                    annotation.time_range.max().as_i64(),
+                    annotation.title,
+                    annotation.note.len(),
+                    annotation.tags,
+                );
+                self.notifications.success(
+                    "Time range annotation captured (backend submission is not implemented yet).",
+                );
+            }
+
             #[cfg(not(target_arch = "wasm32"))]
             SystemCommand::FileSaver(file_saver) => {
                 if let Err(err) = self.background_tasks.spawn_file_saver(file_saver) {

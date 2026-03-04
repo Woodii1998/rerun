@@ -1,6 +1,7 @@
 use egui::{Color32, CursorIcon, Id, NumExt as _, Rangef, Rect};
 use re_log_types::{
-    AbsoluteTimeRange, AbsoluteTimeRangeF, Duration, TimeInt, TimeReal, TimeType, TimestampFormat,
+    AbsoluteTimeRange, AbsoluteTimeRangeF, Duration, TimeInt, TimeReal, TimeType, TimelineName,
+    TimestampFormat,
 };
 use re_sdk_types::blueprint::components::LoopMode;
 use re_ui::{HasDesignTokens as _, UICommand, UICommandSender as _, UiExt as _, list_item};
@@ -8,6 +9,12 @@ use re_viewer_context::open_url::ViewerOpenUrl;
 use re_viewer_context::{SystemCommandSender as _, TimeControl, TimeControlCommand, ViewerContext};
 
 use super::time_ranges_ui::TimeRangesUi;
+
+#[derive(Debug, Clone, Copy)]
+pub struct TimelineSelectionForAnnotation {
+    pub timeline_name: TimelineName,
+    pub time_range: AbsoluteTimeRange,
+}
 
 /// Paints a rect on the timeline given a time range.
 pub fn paint_timeline_range(
@@ -60,6 +67,7 @@ pub fn loop_selection_ui(
     time_area_painter: &egui::Painter,
     timeline_rect: &Rect,
     time_commands: &mut Vec<TimeControlCommand>,
+    annotation_request: &mut Option<TimelineSelectionForAnnotation>,
 ) {
     let Some(time_type) = time_ctrl.time_type() else {
         return;
@@ -134,7 +142,17 @@ pub fn loop_selection_ui(
 
                 middle_response.context_menu(|ui| {
                     let is_on_selection = true;
-                    selection_context_menu(ui, ctx, time_commands, is_on_selection);
+                    selection_context_menu(
+                        ui,
+                        ctx,
+                        time_commands,
+                        is_on_selection,
+                        Some(TimelineSelectionForAnnotation {
+                            timeline_name: *time_ctrl.timeline_name(),
+                            time_range: selected_range.to_int(),
+                        }),
+                        annotation_request,
+                    );
                 });
 
                 let left_response = ui
@@ -210,7 +228,14 @@ pub fn loop_selection_ui(
 
     timeline_response.context_menu(|ui| {
         let is_on_selection = false;
-        selection_context_menu(ui, ctx, time_commands, is_on_selection);
+        selection_context_menu(
+            ui,
+            ctx,
+            time_commands,
+            is_on_selection,
+            None,
+            annotation_request,
+        );
     });
 
     // Start new selection?
@@ -315,6 +340,8 @@ fn selection_context_menu(
     ctx: &ViewerContext<'_>,
     time_commands: &mut Vec<TimeControlCommand>,
     is_on_selection: bool,
+    annotation_target: Option<TimelineSelectionForAnnotation>,
+    annotation_request: &mut Option<TimelineSelectionForAnnotation>,
 ) {
     let modifier = ui.format_modifiers(egui::Modifiers::ALT);
     if ui
@@ -360,6 +387,17 @@ fn selection_context_menu(
         && let Ok(copy_command) = copy_command
     {
         ctx.command_sender().send_system(copy_command);
+    }
+
+    if ui
+        .add_enabled(
+            annotation_target.is_some(),
+            egui::Button::new("Annotate time selection…"),
+        )
+        .on_disabled_hover_text("Open the context menu on selected time to annotate it")
+        .clicked()
+    {
+        *annotation_request = annotation_target;
     }
 }
 

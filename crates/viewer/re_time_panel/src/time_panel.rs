@@ -11,7 +11,8 @@ use re_data_ui::DataUi as _;
 use re_data_ui::item_ui::guess_instance_path_icon;
 use re_entity_db::{EntityDb, InstancePath};
 use re_log_types::{
-    AbsoluteTimeRange, ApplicationId, ComponentPath, EntityPath, TimeInt, TimeReal,
+    AbsoluteTimeRange, ApplicationId, ComponentPath, EntityPath, StoreId, TimeInt, TimeReal,
+    TimelineName,
 };
 use re_sdk_types::ComponentIdentifier;
 use re_sdk_types::blueprint::components::PanelState;
@@ -23,8 +24,8 @@ use re_ui::{
 use re_viewer_context::open_url::ViewerOpenUrl;
 use re_viewer_context::{
     CollapseScope, HoverHighlight, Item, ItemCollection, ItemContext, SystemCommand,
-    SystemCommandSender as _, TimeControl, TimeControlCommand, TimeView, UiLayout, ViewerContext,
-    VisitorControlFlow,
+    SystemCommandSender as _, TimeControl, TimeControlCommand, TimeRangeAnnotation, TimeView,
+    UiLayout, ViewerContext, VisitorControlFlow,
 };
 use re_viewport_blueprint::ViewportBlueprint;
 
@@ -88,6 +89,34 @@ impl From<TimePanelSource> for re_log_types::StoreKind {
     }
 }
 
+#[derive(Debug)]
+struct TimeRangeAnnotationEditor {
+    store_id: StoreId,
+    timeline_name: TimelineName,
+    time_range: AbsoluteTimeRange,
+    title: String,
+    note: String,
+    tags: String,
+    validation_error: Option<String>,
+}
+
+impl TimeRangeAnnotationEditor {
+    fn from_selection(
+        store_id: StoreId,
+        selection: time_selection_ui::TimelineSelectionForAnnotation,
+    ) -> Self {
+        Self {
+            store_id,
+            timeline_name: selection.timeline_name,
+            time_range: selection.time_range,
+            title: String::new(),
+            note: String::new(),
+            tags: String::new(),
+            validation_error: None,
+        }
+    }
+}
+
 /// A panel that shows entity names to the left, time on the top.
 ///
 /// This includes the timeline controls and streams view.
@@ -147,6 +176,10 @@ pub struct TimePanel {
     /// If we're hovering a specific event - what time is it?
     #[serde(skip)]
     hovered_event_time: Option<TimeInt>,
+
+    /// Transient state for the "Annotate time selection" editor window.
+    #[serde(skip)]
+    annotation_editor: Option<TimeRangeAnnotationEditor>,
 }
 
 impl Default for TimePanel {
@@ -166,6 +199,7 @@ impl Default for TimePanel {
             scroll_to_me_item: None,
             time_edit_string: None,
             hovered_event_time: None,
+            annotation_editor: None,
         }
     }
 }
@@ -218,6 +252,7 @@ impl TimePanel {
         self.hovered_event_time = None;
 
         let mut time_commands = Vec::new();
+        let mut annotation_request = None;
 
         // this is the size of everything above the central panel (window title bar, top bar on web,
         // etc.)
@@ -273,10 +308,20 @@ impl TimePanel {
                         entity_db,
                         ui,
                         &mut time_commands,
+                        &mut annotation_request,
                     );
                 }
             },
         );
+
+        if let Some(selection) = annotation_request {
+            self.annotation_editor = Some(TimeRangeAnnotationEditor::from_selection(
+                entity_db.store_id().clone(),
+                selection,
+            ));
+        }
+
+        self.annotation_editor_ui(ctx, ui.ctx());
 
         if !time_commands.is_empty() {
             ctx.command_sender()
@@ -295,6 +340,7 @@ impl TimePanel {
         entity_db: &EntityDb,
         ui: &mut Ui,
         time_commands: &mut Vec<TimeControlCommand>,
+        annotation_request: &mut Option<time_selection_ui::TimelineSelectionForAnnotation>,
     ) {
         let tokens = ui.tokens();
 
@@ -336,6 +382,7 @@ impl TimePanel {
                     entity_db,
                     ui,
                     time_commands,
+                    annotation_request,
                     top_row_rect.bottom(),
                 );
             });
@@ -440,6 +487,7 @@ impl TimePanel {
         entity_db: &re_entity_db::EntityDb,
         ui: &mut egui::Ui,
         time_commands: &mut Vec<TimeControlCommand>,
+        annotation_request: &mut Option<time_selection_ui::TimelineSelectionForAnnotation>,
         top_row_y: f32,
     ) {
         re_tracing::profile_function!();
@@ -618,6 +666,7 @@ impl TimePanel {
             &time_bg_area_painter,
             &timeline_rect,
             time_commands,
+            annotation_request,
         );
         let time_area_response = pan_and_zoom_interaction(
             &self.time_ranges_ui,
@@ -1410,6 +1459,90 @@ impl TimePanel {
         }
     }
 
+    fn annotation_editor_ui(&mut self, ctx: &ViewerContext<'_>, egui_ctx: &egui::Context) {
+        let Some(mut editor) = self.annotation_editor.take() else {
+            return;
+        };
+
+        let mut keep_open = true;
+        let mut submitted = false;
+        let mut close_requested = false;
+        let source_id = match self.source {
+            TimePanelSource::Recording => "recording",
+            TimePanelSource::Blueprint => "blueprint",
+        };
+
+        egui::Window::new("Annotate time selection")
+            .id(egui::Id::new("timeline_annotation_editor").with(source_id))
+            .collapsible(false)
+            .default_width(460.0)
+            .open(&mut keep_open)
+            .show(egui_ctx, |ui| {
+                ui.label(format!("Timeline: {}", editor.timeline_name));
+                ui.label(format!(
+                    "Range: {} – {}",
+                    editor.time_range.min().as_i64(),
+                    editor.time_range.max().as_i64()
+                ));
+                ui.separator();
+
+                ui.label("Title");
+                ui.text_edit_singleline(&mut editor.title);
+
+                ui.label("Note");
+                ui.add(
+                    egui::TextEdit::multiline(&mut editor.note)
+                        .desired_width(ui.available_width())
+                        .desired_rows(5),
+                );
+
+                ui.label("Tags (comma-separated)");
+                ui.text_edit_singleline(&mut editor.tags);
+
+                if let Some(validation_error) = editor.validation_error.as_ref() {
+                    ui.colored_label(ui.visuals().error_fg_color, validation_error);
+                }
+
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        close_requested = true;
+                    }
+
+                    if ui.button("Submit").clicked() {
+                        let title = editor.title.trim();
+                        if title.is_empty() {
+                            editor.validation_error = Some("Title is required.".to_owned());
+                        } else {
+                            let annotation = TimeRangeAnnotation {
+                                timeline: editor.timeline_name,
+                                time_range: editor.time_range,
+                                title: title.to_owned(),
+                                note: editor.note.trim().to_owned(),
+                                tags: parse_annotation_tags(&editor.tags),
+                            };
+
+                            ctx.command_sender().send_system(
+                                SystemCommand::SubmitTimeRangeAnnotation {
+                                    store_id: editor.store_id.clone(),
+                                    annotation,
+                                },
+                            );
+                            submitted = true;
+                        }
+                    }
+                });
+            });
+
+        if close_requested {
+            keep_open = false;
+        }
+
+        if keep_open && !submitted {
+            self.annotation_editor = Some(editor);
+        }
+    }
+
     fn collapse_scope(&self) -> CollapseScope {
         match (self.source, self.filter_state.session_id()) {
             (TimePanelSource::Recording, None) => CollapseScope::StreamsTree,
@@ -2021,6 +2154,14 @@ fn copy_time_properties_context_menu(ui: &mut egui::Ui, time: TimeReal) {
         re_log::info!("Copied hovered timestamp: {}", time);
         ui.copy_text(time);
     }
+}
+
+fn parse_annotation_tags(tags: &str) -> Vec<String> {
+    tags.split(|c| c == ',' || c == '，')
+        .map(str::trim)
+        .filter(|tag| !tag.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 impl TimePanel {

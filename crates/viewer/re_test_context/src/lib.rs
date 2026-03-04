@@ -916,6 +916,7 @@ impl TestContext {
                 | SystemCommand::OnAuthChanged(_)
                 | SystemCommand::Logout
                 | SystemCommand::SaveScreenshot { .. }
+                | SystemCommand::SubmitTimeRangeAnnotation { .. }
                 | SystemCommand::ShowNotification { .. } => handled = false,
 
                 #[cfg(debug_assertions)]
